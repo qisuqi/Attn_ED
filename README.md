@@ -1,4 +1,4 @@
-# Attn_ED
+# AttnED
 
 Using Encoder-Decoder with Attention Mechanism (AttnED) as the prediction model, and have three post-hoc XAI methods to choose from to explain the model - DiCE, LIME, and SHAP. 
 
