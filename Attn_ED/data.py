@@ -4,7 +4,7 @@ from tensorflow import keras
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, OrdinalEncoder, OneHotEncoder
 from scipy import stats
 import warnings
-from Attn_ED import utils
+from AttnED_TensorFlow import utils
 
 
 class ProcessData:
@@ -240,16 +240,23 @@ class ProcessData:
         return outliers_df
 
     def get_processed_data(self, data, ids, date, ordinal_col, nominal_col, groupby,
-                           impute_days=True, remove_outliers=True, Weekday=True):
+                           compute_usage=True, aggregate_variables=True,
+                           impute_days=True, remove_outliers=True, weekday=True):
 
-        df_1 = self.compute_usage(data, ids, date)
+        if compute_usage:
+            df_1 = self.compute_usage(data, ids, date)
+        else:
+            df_1 = data
 
         df_2 = self.treat_cat_vars(df_1, ordinal_col, nominal_col)
 
-        df_3 = self.aggregate_variables(df_2, groupby)
+        if aggregate_variables:
+            df_3 = self.aggregate_variables(df_2, groupby)
+        else:
+            df_3 = df_2
 
         if impute_days:
-            if Weekday:
+            if weekday:
                 df_4 = self.missing_days(df_3, weekday=True)
             else:
                 df_4 = self.missing_days(df_3, weekday=False)
@@ -264,7 +271,7 @@ class ProcessData:
         return df_5
 
     def transform_variables(self, data, ids, ordinal_col, nominal_col, cont_col,
-                            transformed=True, return_scaler=True):
+                            outcome='Usage', transformed=True, return_scaler=True):
 
         #data = self.remove_outliers(ids, date, ordinal_col, nominal_col, cont_col, groupby, sec_groupby)
         data = self.to_df(data)
@@ -288,8 +295,8 @@ class ProcessData:
             normalised = self.normaliser.fit_transform(concat)
 
             # Keep a copy of only standardising and normalising the usage for easier inverse transform later.
-            usage_scaled = self.scaler.fit_transform(np.array(data['Usage']).reshape(-1, 1))
-            usage_normalised = self.normaliser.fit_transform(usage_scaled)
+            outcome_scaled = self.scaler.fit_transform(np.array(data[outcome]).reshape(-1, 1))
+            outcome_normalised = self.normaliser.fit_transform(outcome_scaled)
 
             preprocessed = np.concatenate((ids_array, date_array, normalised), axis=1)
             for i in cont_col:
@@ -308,8 +315,8 @@ class ProcessData:
         col_names.insert(1, 'Date')
         preprocessed_df = pd.DataFrame(preprocessed, columns=col_names)
 
-        col_names.remove('Age')
-        col_names.insert(4, 'Age')
+        #col_names.remove('Age')
+        #col_names.insert(4, 'Age')
         preprocessed_df = preprocessed_df[col_names]
 
         if return_scaler:
@@ -317,32 +324,51 @@ class ProcessData:
         else:
             return preprocessed_df
 
-    def preprocess_timesteps(self, data, static_cols_lens=5, n_in=1, n_out=1, dropnan=True):
+    def preprocess_timesteps(self, data, static_cols_lens=5, n_in=1, n_out=1, groupby=True, dropnan=True):
 
         data = self.to_df(data)
 
         # Pre-process multivariate time series, by taking the next timestamp as y (to be predicted).
-        agg_data = []
-        for i in data['ID'].unique():
+
+        if groupby:
+            agg_data = []
+            for i in data['ID'].unique():
+                col_index = len(data.columns)
+                dropping_col_index = col_index - static_cols_lens - 1
+
+                sub_data = data[data['ID'] == i]
+                sub_data.sort_index()
+                agg = utils.preprocess_multivariate_ts(sub_data.values, n_in, n_out, dropnan=dropnan)
+                if n_in == 1:
+                    final_agg = agg.drop(agg.iloc[:, col_index:-1], axis=1)
+                elif n_in == 2:
+                    agg1 = agg.drop(agg.iloc[:, col_index:col_index + static_cols_lens], axis=1)
+                    final_agg = agg1.drop(agg1.iloc[:, col_index + dropping_col_index + 1:-1], axis=1)
+                elif n_in == 3:
+                    agg1 = agg.drop(agg.iloc[:, col_index:col_index + static_cols_lens], axis=1)
+                    agg2 = agg1.drop(agg1.iloc[:, col_index + dropping_col_index + 1:
+                                                  col_index + dropping_col_index + static_cols_lens + 1], axis=1)
+                    final_agg = agg2.drop(agg2.iloc[:, col_index + dropping_col_index * 2 + 2:-1], axis=1)
+                else:
+                    raise Exception('Too many timesteps')
+                agg_data.append(final_agg.values)
+        else:
             col_index = len(data.columns)
             dropping_col_index = col_index - static_cols_lens - 1
 
-            sub_data = data[data['ID'] == i]
-            sub_data.sort_index()
-            agg = utils.preprocess_multivariate_ts(sub_data.values, n_in, n_out, dropnan=dropnan)
+            agg = utils.preprocess_multivariate_ts(data.values, n_in, n_out, dropnan=dropnan)
             if n_in == 1:
-                final_agg = agg.drop(agg.iloc[:, col_index:-1], axis=1)
+                agg_data = agg.drop(agg.iloc[:, col_index:-1], axis=1)
             elif n_in == 2:
                 agg1 = agg.drop(agg.iloc[:, col_index:col_index + static_cols_lens], axis=1)
-                final_agg = agg1.drop(agg1.iloc[:, col_index + dropping_col_index + 1:-1], axis=1)
+                agg_data = agg1.drop(agg1.iloc[:, col_index + dropping_col_index + 1:-1], axis=1)
             elif n_in == 3:
                 agg1 = agg.drop(agg.iloc[:, col_index:col_index + static_cols_lens], axis=1)
                 agg2 = agg1.drop(agg1.iloc[:, col_index + dropping_col_index + 1:
-                                           col_index + dropping_col_index + static_cols_lens + 1], axis=1)
-                final_agg = agg2.drop(agg2.iloc[:, col_index + dropping_col_index*2 + 2:-1], axis=1)
+                                              col_index + dropping_col_index + static_cols_lens + 1], axis=1)
+                agg_data = agg2.drop(agg2.iloc[:, col_index + dropping_col_index * 2 + 2:-1], axis=1)
             else:
                 raise Exception('Too many timesteps')
-            agg_data.append(final_agg.values)
 
         col_names = list(data.columns)
 
@@ -358,18 +384,31 @@ class ProcessData:
             raise Exception('Too many timesteps')
         column_names.append('Outcome')
 
-        flat_agg_data = [x for xs in agg_data for x in xs]
+        if groupby:
+            flat_agg_data = [x for xs in agg_data for x in xs]
+        else:
+            flat_agg_data = agg_data.values
         flat_agg_df = pd.DataFrame(flat_agg_data, columns=column_names)
+
+        if not groupby:
+            flat_agg_df['ID'] = flat_agg_df['ID'].astype('int64')
+            flat_agg_df['Date'] = flat_agg_df['Date'].astype('datetime64[ns]')
+
+            dtype_cols = col_names
+            dtype_cols.remove('ID')
+            dtype_cols.remove('Date')
+
+            flat_agg_df[dtype_cols] = flat_agg_df[dtype_cols].astype('float64')
 
         return flat_agg_df
 
-    def split_dataset(self,
-                      data,
-                      num_class=2,
-                      regression=True,
-                      return_train_data=True,
-                      return_with_ids=True
-                      ):
+    def split_dataset_per_user(self,
+                               data,
+                               num_class=2,
+                               regression=True,
+                               return_train_data=True,
+                               return_with_ids=True
+                               ):
 
         Train, train_x, val_x, test_x, train_y, val_y, test_y = [], [], [], [], [], [], []
 
@@ -432,13 +471,25 @@ class ProcessData:
         testY_df = testY_df_ids.drop(['ID'], axis=1)
 
         trainX, trainY = np.array(trainX_df).astype('float32'), np.array(trainY_df).reshape(-1, 1).astype('float32')
-        testX, testY = np.array(testX_df).astype('float32'), np.array(testY_df).astype('float32')
+        testX, testY = np.array(testX_df).astype('float32'), np.array(testY_df).reshape(-1, 1).astype('float32')
         valX, valY = np.array(valX_df).astype('float32'), np.array(valY_df).reshape(-1, 1).astype('float32')
 
         if not regression:
             trainY = keras.utils.to_categorical(trainY, num_classes=num_class)
             valY = keras.utils.to_categorical(valY, num_classes=num_class)
             testY = keras.utils.to_categorical(testY, num_classes=num_class)
+
+            cla_trainY = pd.DataFrame(trainY)
+            trainY_df_ids = pd.concat([trainY_df_ids, cla_trainY], axis=1)
+            trainY_df_ids = trainY_df_ids.drop('Outcome', axis=1)
+
+            cla_valY = pd.DataFrame(valY)
+            valY_df_ids = pd.concat([valY_df_ids, cla_valY], axis=1)
+            valY_df_ids = valY_df_ids.drop('Outcome', axis=1)
+
+            cla_testY = pd.DataFrame(testY)
+            testY_df_ids = pd.concat([testY_df_ids, cla_testY], axis=1)
+            testY_df_ids = testY_df_ids.drop('Outcome', axis=1)
 
         trainX = trainX.reshape((trainX.shape[0], trainX.shape[1], 1))
         valX = valX.reshape((valX.shape[0], valX.shape[1], 1))
@@ -450,3 +501,76 @@ class ProcessData:
             return trainX_df_ids, valX_df_ids, testX_df_ids, trainY_df_ids, valY_df_ids, testY_df_ids
         else:
             return trainX, valX, testX, trainY, valY, testY
+
+    def split_dataset(self,
+                      data,
+                      num_class=2,
+                      regression=True,
+                      return_train_data=True,
+                      return_with_ids=True
+                      ):
+
+        # Split the data into train, validation, and test sets.
+
+        training_days = np.round(len(data) * 0.8, 0).astype(int)
+
+        train = data.iloc[:training_days, :]
+        test = data.iloc[training_days:, :]
+
+        x_train, y_train = train.iloc[:, :-1], train.iloc[:, [0, -1]]
+        x_test, y_test = test.iloc[:, :-1], test.iloc[:, [0, -1]]
+
+        validation_days = np.round(len(train) * 0.2, 0).astype(int)
+
+        x_val = x_train.iloc[-validation_days:, :]
+        y_val = y_train.iloc[-validation_days:]
+
+        train_df = pd.DataFrame(train, columns=data.columns)
+        train_df = train_df.drop(['ID', 'Date'], axis=1)
+
+        # Keep a copy of the split sets with the identifiers.
+        x_colnames = list(data.columns)
+        x_colnames.remove('Outcome')
+
+        trainX_df_ids = pd.DataFrame(x_train, columns=x_colnames)
+        trainX_df = trainX_df_ids.drop(['ID', 'Date'], axis=1)
+
+        valX_df_ids = pd.DataFrame(x_val, columns=x_colnames)
+        valX_df = valX_df_ids.drop(['ID', 'Date'], axis=1)
+
+        testX_df_ids = pd.DataFrame(x_test, columns=x_colnames)
+        testX_df = testX_df_ids.drop(['ID', 'Date'], axis=1)
+
+        trainY_df_ids = pd.DataFrame(y_train, columns=['ID', 'Outcome'])
+        trainY_df = trainY_df_ids.drop('ID', axis=1)
+
+        valY_df_ids = pd.DataFrame(y_val, columns=['ID', 'Outcome'])
+        valY_df = valY_df_ids.drop('ID', axis=1)
+
+        testY_df_ids = pd.DataFrame(y_test, columns=['ID', 'Outcome'])
+        testY_df = testY_df_ids.drop(['ID'], axis=1)
+
+        trainX = np.array(trainX_df).astype('float32')
+        testX = np.array(testX_df).astype('float32')
+        valX = np.array(valX_df).astype('float32')
+
+        trainY = np.array(trainY_df).reshape(-1, 1).astype('float32')
+        valY = np.array(valY_df).reshape(-1, 1).astype('float32')
+        testY = np.array(testY_df).reshape(-1, 1).astype('float32')
+
+        if not regression:
+            trainY = keras.utils.to_categorical(trainY_df, num_classes=num_class)
+            testY = keras.utils.to_categorical(testY_df, num_classes=num_class)
+            valY = keras.utils.to_categorical(valY_df, num_classes=num_class)
+
+        trainX = trainX.reshape((trainX.shape[0], trainX.shape[1], 1))
+        valX = valX.reshape((valX.shape[0], valX.shape[1], 1))
+        testX = testX.reshape((testX.shape[0], testX.shape[1], 1))
+
+        if return_train_data:
+            return train_df
+        elif return_with_ids:
+            return trainX_df_ids, valX_df_ids, testX_df_ids, trainY_df_ids, valY_df_ids, testY_df_ids
+        else:
+            return trainX, valX, testX, trainY, valY, testY
+

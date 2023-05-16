@@ -1,10 +1,11 @@
-from tensorflow import keras
+import tensorflow as tf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import roc_curve, auc
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_curve, auc, confusion_matrix, roc_auc_score
+import seaborn as sns
+from itertools import cycle
 
 
 def remove_static_cols(col_names, timesteps=3):
@@ -12,51 +13,30 @@ def remove_static_cols(col_names, timesteps=3):
     t_0 = [f'{x}_t0' for x in col_names]
     t_0[0] = 'ID'
     t_0[1] = 'Date'
-    t_0[2] = 'Sex_1'
-    t_0[3] = 'Sex_2'
+    t_0[2] = 'M'
+    t_0[3] = 'F'
     t_0[4] = 'Age'
 
     t_1 = [f'{x}_t1' for x in col_names]
     t_1.remove('ID_t1')
     t_1.remove('Date_t1')
-    t_1.remove('Sex_1_t1')
-    t_1.remove('Sex_2_t1')
+    t_1.remove('M_t1')
+    t_1.remove('F_t1')
     t_1.remove('Age_t1')
 
     t_2 = [f'{x}_t2' for x in col_names]
     t_2.remove('ID_t2')
     t_2.remove('Date_t2')
-    t_2.remove('Sex_1_t2')
-    t_2.remove('Sex_2_t2')
+    t_2.remove('M_t2')
+    t_2.remove('F_t2')
     t_2.remove('Age_t2')
 
     t_3 = [f'{x}_t3' for x in col_names]
     t_3.remove('ID_t3')
     t_3.remove('Date_t3')
-    t_3.remove('Sex_1_t3')
-    t_3.remove('Sex_2_t3')
+    t_3.remove('M_t3')
+    t_3.remove('F_t3')
     t_3.remove('Age_t3')
-
-    t_4 = [f'{x}_t4' for x in col_names]
-    t_4.remove('ID_t4')
-    t_4.remove('Date_t4')
-    t_4.remove('Sex_1_t4')
-    t_4.remove('Sex_2_t4')
-    t_4.remove('Age_t4')
-
-    t_5 = [f'{x}_t5' for x in col_names]
-    t_5.remove('ID_t5')
-    t_5.remove('Date_t5')
-    t_5.remove('Sex_1_t5')
-    t_5.remove('Sex_2_t5')
-    t_5.remove('Age_t5')
-
-    t_6 = [f'{x}_t6' for x in col_names]
-    t_6.remove('ID_t6')
-    t_6.remove('Date_t6')
-    t_6.remove('Sex_1_t6')
-    t_6.remove('Sex_2_t6')
-    t_6.remove('Age_t6')
 
     if timesteps == 2:
         column_names = sum([t_0, t_1], [])
@@ -68,21 +48,18 @@ def remove_static_cols(col_names, timesteps=3):
 
 
 def compute_mape(true, pred):
-    if true.size != pred.size:
-        print("Number of true and pred do not match")
 
-    mape = np.mean((np.abs((true - pred)/true)))
-    return mape
+    eps = np.finfo(np.float64).eps
+
+    return np.mean(np.abs(true - pred) / np.maximum(np.abs(true), eps))
 
 
 def compute_wape(true, pred):
-    if true.size != pred.size:
-        print("Number of true and pred do not match")
 
-    nume = np.sum(np.abs(true - pred))
-    denom = np.sum(np.abs(true))
-    wape = nume / denom
-    return wape
+    nominator = np.sum(np.abs(true - pred))
+    denominator = np.sum(np.abs(true))
+
+    return nominator / denominator
 
 
 def compute_mase(train, true, pred):
@@ -90,16 +67,17 @@ def compute_mase(train, true, pred):
     for i in range(1, len(train)):
         pred_naive.append(train[(i - 1)])
 
-    mase = np.mean(abs(train[1:] - pred_naive))
+    mae_naive = np.mean(abs(train[1:] - pred_naive))
 
-    return np.mean(abs(true - pred)) / mase
+    return np.mean(abs(true - pred)) / mae_naive
 
 
 def compute_sampe(true, pred):
-    true = np.reshape(true, (-1, ))
-    pred = np.reshape(pred, (-1, ))
 
-    return np.mean(2.0 * np.abs(true - pred) / (np.abs(true) + np.mean(pred))).item()
+    nominator = np.abs(true - pred)
+    denominator = np.abs(true) + np.abs(pred)
+
+    return np.mean(2.0 * nominator / denominator)
 
 
 def error_estimator(true, pred, train):
@@ -152,13 +130,47 @@ def plot_rmse(rmse, val_rmse):
     plt.show()
 
 
-def plot_roc(labels, predictions):
-    fpr, tpr, thresholds = roc_curve(labels, predictions, pos_label=1)
-    roc_auc = auc(fpr, tpr)
+def roc_auc_score_multiclass(actual_class, pred_class, average="macro", return_type='auc'):
+    # creating a set of all the unique classes using the actual class list
+    unique_class = actual_class.unique()
+    roc_auc_dict = {}
 
-    plt.plot(fpr, tpr, color='darkorange', label='ROC curve (area = %0.2f)' % roc_auc)
-    plt.plot([0, 1], [0, 1], color='navy', linestyle='--')
-    plt.xlim([0.0, 1.0])
+    for per_class in unique_class:
+        # creating a list of all the classes except the current class
+        other_class = [x for x in unique_class if x != per_class]
+
+        # marking the current class as 1 and all other classes as 0
+        new_actual_class = [0 if x in other_class else 1 for x in actual_class]
+        new_pred_class = [0 if x in other_class else 1 for x in pred_class]
+
+        # using the sklearn metrics method to calculate the roc_auc_score
+        roc_auc = roc_auc_score(new_actual_class, new_pred_class, average=average)
+
+        roc_auc_dict[per_class] = roc_auc
+
+    return roc_auc_dict
+
+
+def plot_roc(fpr, tpr, roc_auc):
+
+    labels = list(fpr.keys())
+
+    fig, ax = plt.subplots()
+    ax.plot(fpr[labels[0]],
+             tpr[labels[0]],
+             color='aqua',
+             label='ROC curve (area = %0.2f)' % roc_auc[labels[0]])
+    ax.plot(fpr[labels[1]],
+             tpr[labels[1]],
+             color='darkorange',
+             label='ROC curve (area = %0.2f)' % roc_auc[labels[1]])
+    ax.plot(fpr[labels[2]],
+             tpr[labels[2]],
+             color='cornflowerblue',
+             label='ROC curve (area = %0.2f)' % roc_auc[labels[2]])
+    ax.plot([0, 1], [0, 1], color='navy', linestyle='--')
+
+    plt.xlim([-0.01, 1.0])
     plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
@@ -242,4 +254,21 @@ def inverse_transform(scaler, normaliser, array, dim=2):
         inversed = scaler.inverse_transform(inversed)
         inverse_array = np.reshape(inversed, (inversed.shape[0], inversed.shape[1], 1))
     return inverse_array
+
+
+def get_class_weights(data):
+
+    one, zero = np.bincount(data['Outcome'])
+    total = one + zero
+
+    weight_for_0 = (1 / one) * (total / 2.0)
+    weight_for_1 = (1 / zero) * (total / 2.0)
+
+    initial_bias = np.log([zero / one]).item()
+
+    initial_bias = tf.keras.initializers.Constant(initial_bias)
+
+    return weight_for_0, weight_for_1, initial_bias
+
+
 

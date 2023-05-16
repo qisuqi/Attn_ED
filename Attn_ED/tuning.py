@@ -20,9 +20,11 @@ REGRESSION_METRICS = [tf.keras.metrics.MeanSquaredError(name="mse"),
 
 class HyperModel(kt.HyperModel):
 
-    def __init__(self, x_train, regression):
+    def __init__(self, x_train, regression, num_class):
+        super().__init__()
         self.trainX = x_train
         self.regression = regression
+        self.num_class = num_class
 
     def build(self, hp):
         """Define the model architecture for hyper-tuning."""
@@ -30,8 +32,8 @@ class HyperModel(kt.HyperModel):
         lstm_unit = hp.Choice('lstm_unit', values=[32, 64, 128, 216, 512])
         lr = hp.Float("lr", min_value=1e-4, max_value=1e-2, sampling="log")
         dr = hp.Float("dr", min_value=1e-4, max_value=1e-2, sampling="log")
-        drop_blstm = hp.Float("drop_blstm", min_value=1e-4, max_value=1e-2, sampling="log")
-        drop_blstm_rec = hp.Float("drop_blstm_rec", min_value=1e-4, max_value=1e-2, sampling="log")
+        drop_lstm = hp.Float("drop_lstm", min_value=1e-4, max_value=1e-2, sampling="log")
+        drop_lstm_rec = hp.Float("drop_lstm_rec", min_value=1e-4, max_value=1e-2, sampling="log")
         activation = hp.Choice('activation', values=['relu', 'sigmoid', 'tanh'])
 
         inputs = tf.keras.layers.Input(shape=(self.trainX.shape[1], self.trainX.shape[2]))
@@ -39,8 +41,8 @@ class HyperModel(kt.HyperModel):
                                     return_sequences=True,
                                     activation='tanh',
                                     recurrent_activation='sigmoid',
-                                    dropout=drop_blstm,
-                                    recurrent_dropout=drop_blstm_rec,
+                                    dropout=drop_lstm,
+                                    recurrent_dropout=drop_lstm_rec,
                                     kernel_initializer='glorot_normal',
                                     recurrent_initializer='he_uniform')(inputs)
 
@@ -53,8 +55,8 @@ class HyperModel(kt.HyperModel):
                                      return_sequences=False,
                                      activation='tanh',
                                      recurrent_activation='sigmoid',
-                                     dropout=drop_blstm,
-                                     recurrent_dropout=drop_blstm_rec,
+                                     dropout=drop_lstm,
+                                     recurrent_dropout=drop_lstm_rec,
                                      kernel_initializer='glorot_normal',
                                      recurrent_initializer='he_uniform')(drop)
 
@@ -68,13 +70,58 @@ class HyperModel(kt.HyperModel):
                           loss=tf.keras.losses.MeanSquaredError(),
                           metrics=REGRESSION_METRICS)
         else:
-            outputs = tf.keras.layers.Dense(2, activation='softmax')(dense)
+            outputs = tf.keras.layers.Dense(self.num_class, activation='softmax')(dense)
 
             model = tf.keras.Model(inputs=inputs, outputs=outputs)
             model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
                           loss=tf.keras.losses.CategoricalCrossentropy(),
                           metrics=CLASSIFICATION_METRICS)
+
         return model
 
     def fit(self, hp, model, *args, **kwargs):
         return model.fit(*args, batch_size=hp.Choice("bs", [16, 32, 64]), **kwargs)
+
+
+class SimpleHyperModel(kt.HyperModel):
+    def __init__(self, x_train, regression):
+        super().__init__()
+        self.trainX = x_train
+        self.regression = regression
+
+    def build(self, hp):
+        """Define the model architecture for hyper-tuning."""
+
+        unit = hp.Choice('unit', values=[32, 64, 128, 216, 512])
+        lr = hp.Float("lr", min_value=1e-4, max_value=1e-2, sampling="log")
+        dr = hp.Float("dr", min_value=1e-4, max_value=1e-2, sampling="log")
+        activation = hp.Choice('activation', values=['relu', 'sigmoid', 'tanh'])
+
+        inputs = tf.keras.layers.Input(shape=(self.trainX.shape[1],
+                                              self.trainX.shape[2]))
+        dense1 = tf.keras.layers.Dense(unit, activation='relu')(inputs)
+        dense2 = tf.keras.layers.Dense(unit/2, activation='relu')(dense1)
+        dense3 = tf.keras.layers.Dense(unit/4, activation='relu')(dense2)
+        drop1 = tf.keras.layers.Dropout(dr)(dense3)
+        flatten = tf.keras.layers.Flatten()(drop1)
+
+        if self.regression:
+            outputs = tf.keras.layers.Dense(1, activation=activation)(flatten)
+
+            model = tf.keras.Model(inputs=inputs, outputs=outputs)
+            model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
+                          loss=tf.keras.losses.MeanSquaredError(),
+                          metrics=REGRESSION_METRICS)
+        else:
+            outputs = tf.keras.layers.Dense(2, activation='softmax')(flatten)
+
+            model = tf.keras.Model(inputs=inputs, outputs=outputs)
+            model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
+                          loss=tf.keras.losses.CategoricalCrossentropy(),
+                          metrics=CLASSIFICATION_METRICS)
+
+        return model
+
+    def fit(self, hp, model, *args, **kwargs):
+        return model.fit(*args, batch_size=hp.Choice("bs", [16, 32, 64]), **kwargs)
+
